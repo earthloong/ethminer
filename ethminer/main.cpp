@@ -40,7 +40,7 @@
 #endif
 
 #if API_CORE
-#include <libapicore/Api.h>
+#include <libapicore/ApiServer.h>
 #include <libapicore/httpServer.h>
 #endif
 
@@ -50,9 +50,8 @@ using namespace dev::eth;
 
 struct MiningChannel: public LogChannel
 {
-	static const char* name() { return EthGreen "  m"; }
+	static const char* name() { return EthGreen " m"; }
 	static const int verbosity = 2;
-	static const bool debug = false;
 };
 
 #define minelog clog(MiningChannel)
@@ -196,7 +195,15 @@ public:
 		app.add_option("-P,--pool,pool", pools,
 			"Specify one or more pool URLs. See below for URL syntax")
 			->group(CommonGroup);
-	
+
+        app.add_flag("--nocolor", g_logNoColor,
+            "Display monochrome log")
+            ->group(CommonGroup);
+
+        app.add_flag("--syslog", g_logSyslog,
+            "Use syslog appropriate log output (drop timestamp and channel prefix)")
+            ->group(CommonGroup);
+
 #if API_CORE
 
 		app.add_option("--api-port", m_api_port,
@@ -703,8 +710,12 @@ private:
 		}
 
 #if API_CORE
-		Api api(this->m_api_port, f);
+
+		ApiServer api(m_io_service, abs(m_api_port), (m_api_port < 0) ? true : false, f);
+		api.start();
+
         http_server.run(m_http_port, &f, m_show_hwmonitors, m_show_power);
+
 #endif
 
 		// Start PoolManager
@@ -812,17 +823,18 @@ int main(int argc, char** argv)
 	setenv("GPU_MAX_ALLOC_PERCENT", "100");
 	setenv("GPU_SINGLE_ALLOC_PERCENT", "100");
 
+	MinerCLI m;
+
+	m.ParseCommandLine(argc, argv);
+
 	if (getenv("SYSLOG"))
-	{
-		g_syslog = true;
-		g_useColor = false;
-	}
-	if (getenv("NO_COLOR"))
-		g_useColor = false;
+		g_logSyslog = true;
+	if (g_logSyslog || (getenv("NO_COLOR")))
+		g_logNoColor = true;
 #if defined(_WIN32)
-	if (g_useColor)
+	if (!g_logNoColor)
 	{
-		g_useColor = false;
+		g_logNoColor = true;
 		// Set output mode to handle virtual terminal sequences
 		// Only works on Windows 10, but most users should use it anyway
 		HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -833,15 +845,11 @@ int main(int argc, char** argv)
 			{
 				dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
 				if (SetConsoleMode(hOut, dwMode))
-					g_useColor = true;
+					g_logNoColor = false;
 			}
 		}
 	}
 #endif
-
-	MinerCLI m;
-
-	m.ParseCommandLine(argc, argv);
 
 	try
 	{

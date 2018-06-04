@@ -5,20 +5,6 @@ using namespace std;
 using namespace dev;
 using namespace eth;
 
-static string diffToDisplay(double diff)
-{
-	static const char* k[] = {"hashes", "kilohashes", "megahashes", "gigahashes", "terahashes", "petahashes"};
-	uint32_t i = 0;
-	while ((diff > 1000.0) && (i < ((sizeof(k) / sizeof(char *)) - 2)))
-	{
-		i++;
-		diff = diff / 1000.0;
-	}
-	stringstream ss;
-	ss << fixed << setprecision(2) << diff << ' ' << k[i]; 
-	return ss.str();
-}
-
 PoolManager::PoolManager(PoolClient * client, Farm &farm, MinerType const & minerType, unsigned maxTries) : m_farm(farm), m_minerType(minerType), m_submit_times(50)
 {
 	p_client = client;
@@ -60,28 +46,37 @@ PoolManager::PoolManager(PoolClient * client, Farm &farm, MinerType const & mine
 
 	});
 
-	p_client->onWorkReceived([&](WorkPackage const& wp)
+	p_client->onWorkReceived([&](WorkPackage const& wp, bool check_for_duplicates)
 	{
-		for (auto h : m_headers)
-			if (h == wp.header)
-			{
-				cwarn << EthYellow "Duplicate job" << wp.header << " discarded" EthReset;
-				return;
-			}
+		if (check_for_duplicates) {
+			for (auto h : m_headers)
+				if (h == wp.header)
+				{
+					cwarn << EthYellow "Duplicate job #" << wp.header.abridged() << " discarded" EthReset;
+					return;
+				}
+		}
 		m_headers.push_back(wp.header);
-		while (m_headers.size() > 4)
-			m_headers.pop_front();
+		if (m_headers.size() > 4)
+				m_headers.pop_front();
 
-		cnote << "New job " EthWhite << wp.header << EthReset " " << m_connections[m_activeConnectionIdx].Host()
+		cnote << "Job: " EthWhite "#"<< wp.header.abridged() << EthReset " " << m_connections[m_activeConnectionIdx].Host()
 			<< p_client->ActiveEndPoint();
 		if (wp.boundary != m_lastBoundary)
 		{
 			using namespace boost::multiprecision;
 
 			m_lastBoundary = wp.boundary;
-			static const uint512_t dividend("0x10000000000000000000000000000000000000000000000000000000000000000");
+			static const uint256_t dividend("0xffff000000000000000000000000000000000000000000000000000000000000");
 			const uint256_t divisor(string("0x") + m_lastBoundary.hex());
-			cnote << "New pool difficulty: " EthWhite << diffToDisplay(double(dividend / divisor)) << EthReset;
+			stringstream ss;
+			ss << fixed << setprecision(2) << double(dividend / divisor) / 1000000000.0 << "K megahash";
+			cnote << "Pool difficulty: " EthWhite << ss.str() << EthReset;
+		}
+		if (wp.epoch != m_lastEpoch)
+		{
+			cnote << "New epoch " EthWhite << wp.epoch << EthReset;
+			m_lastEpoch = wp.epoch;
 		}
 
 		m_farm.setWork(wp);
@@ -118,8 +113,8 @@ PoolManager::PoolManager(PoolClient * client, Farm &farm, MinerType const & mine
 		}
 
 		std::stringstream ss;
-		ss << std::setw(4) << std::setfill(' ') << ms.count();
-		ss << "ms." << "   " << m_connections[m_activeConnectionIdx].Host() + p_client->ActiveEndPoint();
+		ss << std::setw(4) << std::setfill(' ') << ms.count()
+			<< "ms." << "   " << m_connections[m_activeConnectionIdx].Host() + p_client->ActiveEndPoint();
 		cwarn << EthRed "**Rejected" EthReset << (stale ? "(stale)" : "") << ss.str();
 		m_farm.rejectedSolution(stale);
 	});
@@ -135,9 +130,9 @@ PoolManager::PoolManager(PoolClient * client, Farm &farm, MinerType const & mine
 			m_submit_times.push(std::chrono::steady_clock::now());
 
 			if (sol.stale)
-				cnote << string(EthYellow "Stale solution 0x") + toHex(sol.nonce);
+				cwarn << "Stale solution: " << EthWhite "0x" << toHex(sol.nonce) << EthReset;
 			else
-				cnote << string("Solution 0x") + toHex(sol.nonce);
+				cnote << "Solution: " << EthWhite "0x" << toHex(sol.nonce) << EthReset;
 
 			p_client->submitSolution(sol);
 		}
